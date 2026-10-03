@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: giz-telegram-bot
+    env: docker
+    plan: free
+    autoDeploy: true
