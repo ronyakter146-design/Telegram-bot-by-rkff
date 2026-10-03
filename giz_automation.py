@@ -3,8 +3,8 @@ import os
 import random
 import string
 import re
+import requests
 from playwright.async_api import async_playwright
-from temp_mail.temp_mail import TempMail
 
 GIZ_SIGNUP_URL = "https://www.giz.ai/signUp"
 GIZ_VIDEO_URL = "https://app.giz.ai/ai-video-generator"
@@ -13,27 +13,40 @@ def _generate_password(length=12):
     chars = string.ascii_letters + string.digits + "!@#$"
     return "".join(random.choice(chars) for _ in range(length))
 
-async def _create_temp_inbox():
-    tm = TempMail()
-    return tm.mailbox, tm
+def _create_temp_inbox():
+    """mail.tm API থেকে নতুন টেম্পোরারি ইমেইল তৈরি করে।"""
+    domain_res = requests.get("https://api.mail.tm/domains").json()
+    domain = domain_res['hydra:member'][0]['domain']
+    username = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
+    email = f"{username}@{domain}"
+    password = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
+    
+    requests.post("https://api.mail.tm/accounts", json={"address": email, "password": password})
+    token_res = requests.post("https://api.mail.tm/token", json={"address": email, "password": password}).json()
+    token = token_res['token']
+    return email, token
 
-async def _wait_for_verification_code(tm, timeout=90):
+def _wait_for_verification_code(token, timeout=90):
+    """mail.tm API থেকে ভেরিফিকেশন কোড খুঁজে বের করে।"""
+    headers = {"Authorization": f"Bearer {token}"}
     start_time = asyncio.get_event_loop().time()
     while asyncio.get_event_loop().time() - start_time < timeout:
         try:
-            messages = tm.get_messages()
-            if messages:
-                for msg in messages:
-                    body = msg.get('mail_text', '') or msg.get('mail_html', '')
-                    match = re.search(r'\b(\d{6})\b', body)
-                    if match:
-                        return match.group(1)
+            res = requests.get("https://api.mail.tm/messages", headers=headers).json()
+            if res.get('hydra:totalItems', 0) > 0:
+                msg_id = res['hydra:member'][0]['id']
+                msg_res = requests.get(f"https://api.mail.tm/messages/{msg_id}", headers=headers).json()
+                body = msg_res.get('text', '') or msg_res.get('html', '')
+                match = re.search(r'\b(\d{6})\b', str(body))
+                if match:
+                    return match.group(1)
         except Exception as e:
             print(f"[OTP] Error: {e}")
-        await asyncio.sleep(5)
+        import time
+        time.sleep(5) # ৫ সেকেন্ড পর পর চেক করবে
     return None
 
-async def signup_giz(page, email, tm, password):
+async def signup_giz(page, email, token, password):
     await page.goto(GIZ_SIGNUP_URL, wait_until="networkidle")
     await page.wait_for_timeout(3000)
 
@@ -45,7 +58,7 @@ async def signup_giz(page, email, tm, password):
 
     # ধাপ ২: ভেরিফিকেশন কোড, নাম ও পাসওয়ার্ড
     await page.wait_for_selector('input[placeholder*="6-digit code"]', timeout=10000)
-    code = await _wait_for_verification_code(tm)
+    code = _wait_for_verification_code(token)
     if code:
         await page.fill('input[placeholder*="6-digit code"]', code)
     else:
@@ -98,10 +111,10 @@ async def run_giz_flow(prompt):
         context = await browser.new_context(viewport={"width": 1280, "height": 720})
         page = await context.new_page()
         try:
-            email, tm = await _create_temp_inbox()
+            email, token = _create_temp_inbox()
             password = _generate_password()
             print(f"[Flow] Email: {email}")
-            await signup_giz(page, email, tm, password)
+            await signup_giz(page, email, token, password)
             video_links = await generate_videos(page, prompt, count=2)
             await logout_giz(page)
             return video_links
