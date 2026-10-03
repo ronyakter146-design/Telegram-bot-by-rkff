@@ -1,4 +1,5 @@
 const TelegramBot = require('node-telegram-bot-api');
+const axios = require('axios');
 const fs = require('fs');
 const { runGizFlow } = require('./giz_automation');
 
@@ -9,8 +10,34 @@ if (!BOT_TOKEN) {
   process.exit(1);
 }
 
-const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+// ─── Telegram-এর পুরনো pending update / webhook ক্লিয়ার ───
+async function clearPendingUpdates() {
+  try {
+    await axios.get(`https://api.telegram.org/bot${BOT_TOKEN}/deleteWebhook?drop_pending_updates=true`);
+    console.log('[Telegram] Webhook cleared & pending updates dropped.');
+  } catch (e) {
+    console.log('[Telegram] Clear failed:', e.message);
+  }
+}
 
+const bot = new TelegramBot(BOT_TOKEN, {
+  polling: {
+    autoStart: true,
+    interval: 1000,
+    params: { timeout: 10 }
+  }
+});
+
+// ─── Polling Error Handle (409 Conflict এড়ানোর জন্য) ───
+bot.on('polling_error', (error) => {
+  if (error.code === 'ETELEGRAM' && error.message && error.message.includes('409')) {
+    console.log('[Warning] Polling conflict detected (409). Ignoring...');
+    return;
+  }
+  console.error('[Polling Error]', error.message);
+});
+
+// ─── /start কমান্ড ───
 bot.onText(/\/start/, (msg) => {
   bot.sendMessage(
     msg.chat.id,
@@ -20,6 +47,7 @@ bot.onText(/\/start/, (msg) => {
   );
 });
 
+// ─── মেসেজ হ্যান্ডলার ───
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const prompt = msg.text;
@@ -53,9 +81,13 @@ bot.on('message', async (msg) => {
   } catch (error) {
     console.error('Error:', error);
     if (fs.existsSync('error_screenshot.png')) {
-      await bot.sendPhoto(chatId, 'error_screenshot.png', {
-        caption: `❌ বট ওয়েবসাইটে সমস্যায় পড়েছে।\n\nএই ছবিটা ডেভেলপারকে পাঠাও।`
-      });
+      try {
+        await bot.sendPhoto(chatId, 'error_screenshot.png', {
+          caption: `❌ বট ওয়েবসাইটে সমস্যায় পড়েছে।\n\nএই ছবিটা ডেভেলপারকে পাঠাও।`
+        });
+      } catch (photoErr) {
+        await bot.sendMessage(chatId, `❌ ছবি পাঠাতে সমস্যা: ${photoErr.message}`);
+      }
     } else {
       await bot.editMessageText(
         `❌ ত্রুটি: ${String(error.message).substring(0, 200)}`,
@@ -65,4 +97,7 @@ bot.on('message', async (msg) => {
   }
 });
 
-console.log('Bot started... Polling.');
+// ─── শুরুতে পুরনো update ক্লিয়ার করে বট চালু ───
+clearPendingUpdates().then(() => {
+  console.log('Bot started... Polling.');
+});
