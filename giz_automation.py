@@ -29,26 +29,11 @@ async def _wait_for_verification_code(address, timeout=60):
 
 async def signup_giz(page, email, password):
     await page.goto(GIZ_SIGNUP_URL, wait_until="networkidle")
+    await page.wait_for_timeout(3000)
 
-    # ১. "Sign up with Email" বাটন থাকলে তাতে ক্লিক করবে
-    try:
-        await page.click('text="Sign up with email"', timeout=3000)
-    except:
-        try:
-            await page.click('text="Email"', timeout=3000)
-        except:
-            pass
-
-    # ২. ইমেইল বসানোর জন্য ৫টি আলাদা জায়গায় খুঁজবে
-    email_selectors = [
-        'input[type="email"]', 
-        'input[name="email"]', 
-        'input#email', 
-        'input[placeholder*="email"]', 
-        'input[placeholder*="Email"]'
-    ]
+    # ইমেইল বক্স খোঁজার জন্য সব চেষ্টা করবে
     email_filled = False
-    for selector in email_selectors:
+    for selector in ['input[type="email"]', 'input[name="email"]', 'input#email', 'input[placeholder*="mail"]', 'input[placeholder*="Mail"]']:
         try:
             await page.wait_for_selector(selector, timeout=5000)
             await page.fill(selector, email)
@@ -57,55 +42,34 @@ async def signup_giz(page, email, password):
         except:
             continue
 
+    # যদি ইমেইল বক্স না পায়, তাহলে স্ক্রিনশট তুলে এরর দেবে
     if not email_filled:
+        await page.screenshot(path="error_screenshot.png")
         raise Exception("ইমেইল বক্স খুঁজে পাওয়া যায়নি!")
 
-    # ৩. পাসওয়ার্ড বসানোর জন্য খুঁজবে
-    password_selectors = ['input[type="password"]', 'input[name="password"]', 'input#password']
-    for selector in password_selectors:
+    # পাসওয়ার্ড বসাবে
+    for selector in ['input[type="password"]', 'input[name="password"]', 'input#password']:
         try:
             await page.fill(selector, password)
             break
         except:
             continue
 
-    # ৪. সাবমিট বাটন খুঁজে ক্লিক করবে
-    submit_selectors = [
-        'button[type="submit"]', 
-        'button:has-text("Sign up")', 
-        'button:has-text("Continue")', 
-        'button:has-text("Login")'
-    ]
-    for selector in submit_selectors:
+    # সাবমিট বাটনে ক্লিক করবে
+    for selector in ['button[type="submit"]', 'button:has-text("Sign up")', 'button:has-text("Continue")', 'button:has-text("Login")']:
         try:
             await page.click(selector)
             break
         except:
             continue
 
-    # ৫. ভেরিফিকেশন কোডের জন্য অপেক্ষা
-    try:
-        await page.wait_for_selector('input[placeholder*="code"], input[name*="code"]', timeout=15000)
-        code = await _wait_for_verification_code(email)
-        if code:
-            await page.fill('input[placeholder*="code"], input[name*="code"]', code)
-            await page.click('button[type="submit"]')
-    except Exception:
-        pass
-    await page.wait_for_timeout(3000)
+    await page.wait_for_timeout(5000)
 
 async def generate_videos(page, prompt, count=2):
     results = []
     await page.goto(GIZ_VIDEO_URL, wait_until="networkidle")
     for i in range(count):
-        # প্রম্পট ইনপুটের জন্য একাধিক সিলেক্টর চেষ্টা
-        prompt_selectors = [
-            'textarea[placeholder*="prompt"]', 
-            'textarea[name*="prompt"]', 
-            'textarea[placeholder*="describe"]',
-            'textarea'
-        ]
-        for selector in prompt_selectors:
+        for selector in ['textarea[placeholder*="prompt"]', 'textarea[name*="prompt"]', 'textarea']:
             try:
                 await page.wait_for_selector(selector, timeout=5000)
                 await page.fill(selector, prompt)
@@ -113,13 +77,7 @@ async def generate_videos(page, prompt, count=2):
             except:
                 continue
 
-        # জেনারেট বাটন খোঁজা
-        gen_button_selectors = [
-            'button:has-text("Generate")', 
-            'button:has-text("Create")',
-            'button[type="submit"]'
-        ]
-        for selector in gen_button_selectors:
+        for selector in ['button:has-text("Generate")', 'button:has-text("Create")', 'button[type="submit"]']:
             try:
                 await page.click(selector)
                 break
@@ -145,19 +103,12 @@ async def logout_giz(page):
 
 async def run_giz_flow(prompt):
     async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
-        )
-        context = await browser.new_context(
-            viewport={"width": 1280, "height": 720},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
-        )
+        browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"])
+        context = await browser.new_context(viewport={"width": 1280, "height": 720})
         page = await context.new_page()
         try:
             email = await _create_temp_inbox()
             password = _generate_password()
-            print(f"[Flow] Email: {email}")
             await signup_giz(page, email, password)
             video_links = await generate_videos(page, prompt, count=2)
             await logout_giz(page)
