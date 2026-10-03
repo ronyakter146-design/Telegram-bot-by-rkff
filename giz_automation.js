@@ -88,7 +88,7 @@ async function signupGiz(page, email, token, password) {
   await page.goto(GIZ_SIGNUP_URL, { waitUntil: 'networkidle2', timeout: 60000 });
   await sleep(3000);
 
-  // Step 1: Email
+  // ─── Step 1: Email ───
   await page.waitForSelector('input[placeholder="you@example.com"]', { timeout: 15000 });
   await page.click('input[placeholder="you@example.com"]');
   await page.type('input[placeholder="you@example.com"]', email, { delay: 50 });
@@ -98,7 +98,7 @@ async function signupGiz(page, email, token, password) {
   console.log('[Flow] Clicked Continue with Email');
   await sleep(5000);
 
-  // Step 2: OTP
+  // ─── Step 2: OTP ───
   await page.waitForSelector('input[placeholder*="6-digit code"]', { timeout: 20000 });
   const code = await waitForOTP(token);
   if (!code) {
@@ -120,31 +120,38 @@ async function signupGiz(page, email, token, password) {
       index: i,
       type: inp.type,
       placeholder: inp.placeholder,
+      value: inp.value ? inp.value.substring(0, 15) : '',
       visible: inp.offsetParent !== null
     }));
   });
   console.log('[Debug] Input fields:', JSON.stringify(inputsInfo));
 
-  // Step 3: নাম ও পাসওয়ার্ড JS দিয়ে পূরণ
+  // ─── Step 3: নাম ও পাসওয়ার্ড পজিশন ধরে পূরণ ───
   const fillResult = await page.evaluate((data) => {
-    const inputs = document.querySelectorAll('input');
+    const allInputs = Array.from(document.querySelectorAll('input')).filter(i => i.offsetParent !== null);
+    const passwordInputs = allInputs.filter(i => i.type === 'password');
+    const firstPwdIdx = allInputs.indexOf(passwordInputs[0]);
+
     let nameFilled = false;
     let passFilled = false;
-
-    const passwordInputs = Array.from(inputs).filter(i => i.type === 'password');
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
 
-    for (let inp of inputs) {
-      if (inp.type === 'password') continue;
-      if (inp.placeholder && inp.placeholder.toLowerCase().includes('name')) {
-        setter.call(inp, data.name);
-        inp.dispatchEvent(new Event('input', { bubbles: true }));
-        inp.dispatchEvent(new Event('change', { bubbles: true }));
-        nameFilled = true;
-        break;
-      }
+    // পাসওয়ার্ড ফিল্ডের ঠিক আগে যে খালি টেক্সট বক্স আছে, সেটাই "Your name"
+    for (let i = 0; i < firstPwdIdx; i++) {
+      const inp = allInputs[i];
+      if (inp.type === 'password' || inp.type === 'email') continue;
+      if (inp.readOnly || inp.disabled) continue;
+      if (inp.value && inp.value.length > 0) continue;
+
+      setter.call(inp, data.name);
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      inp.dispatchEvent(new Event('change', { bubbles: true }));
+      nameFilled = true;
+      console.log(`[Debug] Name filled at index ${i}`);
+      break;
     }
 
+    // পাসওয়ার্ড ফিল্ড দুটো ভরে দাও
     if (passwordInputs.length >= 2) {
       setter.call(passwordInputs[0], data.password);
       passwordInputs[0].dispatchEvent(new Event('input', { bubbles: true }));
@@ -155,7 +162,7 @@ async function signupGiz(page, email, token, password) {
       passFilled = true;
     }
 
-    return { nameFilled, passFilled, passwordCount: passwordInputs.length };
+    return { nameFilled, passFilled, firstPwdIdx, totalInputs: allInputs.length };
   }, { name: 'Temp User', password });
 
   console.log('[Debug] Fill result:', JSON.stringify(fillResult));
@@ -167,7 +174,7 @@ async function signupGiz(page, email, token, password) {
 
   await sleep(2000);
 
-  // Step 4: Create an account
+  // ─── Step 4: Create an account বাটনে ক্লিক ───
   const clicked = await clickButtonByText(page, 'Create an account');
   if (!clicked) {
     await page.screenshot({ path: 'error_screenshot.png' });
