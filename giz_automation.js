@@ -18,23 +18,44 @@ function generatePassword(length = 12) {
   return pass;
 }
 
+// ─── Page load (টাইমআউট ৯০ সেকেন্ড, retry সহ) ───
+async function safeGoto(page, url, retries = 2) {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      console.log(`[Goto] Attempt ${i + 1}: ${url}`);
+      await page.goto(url, { 
+        waitUntil: 'domcontentloaded', 
+        timeout: 90000 
+      });
+      console.log(`[Goto] Success: ${url}`);
+      return true;
+    } catch (e) {
+      console.log(`[Goto] Attempt ${i + 1} failed: ${e.message}`);
+      if (i < retries) await sleep(3000);
+    }
+  }
+  throw new Error(`পেজ লোড করা যায়নি: ${url}`);
+}
+
 async function createTempInbox() {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const domainRes = await axios.get('https://api.mail.tm/domains');
+      const domainRes = await axios.get('https://api.mail.tm/domains', { timeout: 30000 });
       const domain = domainRes.data['hydra:member'][0].domain;
       const username = Math.random().toString(36).substring(2, 12);
       const email = `${username}@${domain}`;
       const password = Math.random().toString(36).substring(2, 14);
 
-      const accRes = await axios.post('https://api.mail.tm/accounts', { address: email, password });
+      const accRes = await axios.post('https://api.mail.tm/accounts', 
+        { address: email, password }, { timeout: 30000 });
       if (accRes.status !== 200 && accRes.status !== 201) {
         console.log(`[MailTM] Failed: ${accRes.status}`);
         await sleep(2000);
         continue;
       }
 
-      const tokenRes = await axios.post('https://api.mail.tm/token', { address: email, password });
+      const tokenRes = await axios.post('https://api.mail.tm/token', 
+        { address: email, password }, { timeout: 30000 });
       console.log(`[MailTM] Created: ${email}`);
       return { email, token: tokenRes.data.token };
     } catch (e) {
@@ -50,12 +71,14 @@ async function waitForOTP(token, timeoutSec = 90) {
   while ((Date.now() - start) / 1000 < timeoutSec) {
     try {
       const res = await axios.get('https://api.mail.tm/messages', {
-        headers: { Authorization: `Bearer ${token}` }
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: 15000
       });
       if (res.data['hydra:totalItems'] > 0) {
         const msgId = res.data['hydra:member'][0].id;
         const msgRes = await axios.get(`https://api.mail.tm/messages/${msgId}`, {
-          headers: { Authorization: `Bearer ${token}` }
+          headers: { Authorization: `Bearer ${token}` },
+          timeout: 15000
         });
         const body = msgRes.data.text || msgRes.data.html || '';
         const match = body.match(/\b(\d{6})\b/);
@@ -85,21 +108,32 @@ async function clickButtonByText(page, text) {
 }
 
 async function signupGiz(page, email, token, password) {
-  await page.goto(GIZ_SIGNUP_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+  await safeGoto(page, GIZ_SIGNUP_URL);
   await sleep(3000);
 
   // ─── Step 1: Email ───
-  await page.waitForSelector('input[placeholder="you@example.com"]', { timeout: 15000 });
-  await page.click('input[placeholder="you@example.com"]');
-  await page.type('input[placeholder="you@example.com"]', email, { delay: 50 });
-  await sleep(1000);
+  try {
+    await page.waitForSelector('input[placeholder="you@example.com"]', { timeout: 30000 });
+    await page.click('input[placeholder="you@example.com"]');
+    await page.type('input[placeholder="you@example.com"]', email, { delay: 50 });
+    await sleep(1000);
 
-  await clickButtonByText(page, 'Continue with Email');
-  console.log('[Flow] Clicked Continue with Email');
-  await sleep(5000);
+    await clickButtonByText(page, 'Continue with Email');
+    console.log('[Flow] Clicked Continue with Email');
+    await sleep(8000);
+  } catch (e) {
+    await page.screenshot({ path: 'error_screenshot.png' });
+    throw new Error(`Email step failed: ${e.message}`);
+  }
 
   // ─── Step 2: OTP ───
-  await page.waitForSelector('input[placeholder*="6-digit code"]', { timeout: 20000 });
+  try {
+    await page.waitForSelector('input[placeholder*="6-digit code"]', { timeout: 30000 });
+  } catch (e) {
+    await page.screenshot({ path: 'error_screenshot.png' });
+    throw new Error(`OTP input পাওয়া যায়নি: ${e.message}`);
+  }
+
   const code = await waitForOTP(token);
   if (!code) {
     await page.screenshot({ path: 'error_screenshot.png' });
@@ -109,24 +143,20 @@ async function signupGiz(page, email, token, password) {
   await page.click('input[placeholder*="6-digit code"]');
   await page.type('input[placeholder*="6-digit code"]', code, { delay: 50 });
   console.log(`[Flow] Filled OTP: ${code}`);
-
-  // OTP verify হওয়ার জন্য ১০ সেকেন্ড অপেক্ষা
   await sleep(10000);
 
-  // Debug: লগে ইনপুট ফিল্ড দেখাও
+  // Debug
   const inputsInfo = await page.evaluate(() => {
     const inputs = document.querySelectorAll('input');
     return Array.from(inputs).map((inp, i) => ({
-      index: i,
-      type: inp.type,
-      placeholder: inp.placeholder,
+      index: i, type: inp.type, placeholder: inp.placeholder,
       value: inp.value ? inp.value.substring(0, 15) : '',
       visible: inp.offsetParent !== null
     }));
   });
-  console.log('[Debug] Input fields:', JSON.stringify(inputsInfo));
+  console.log('[Debug] Inputs:', JSON.stringify(inputsInfo));
 
-  // ─── Step 3: নাম ও পাসওয়ার্ড পজিশন ধরে পূরণ ───
+  // ─── Step 3: Name & Password ───
   const fillResult = await page.evaluate((data) => {
     const allInputs = Array.from(document.querySelectorAll('input')).filter(i => i.offsetParent !== null);
     const passwordInputs = allInputs.filter(i => i.type === 'password');
@@ -136,7 +166,6 @@ async function signupGiz(page, email, token, password) {
     let passFilled = false;
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
 
-    // পাসওয়ার্ড ফিল্ডের ঠিক আগে যে খালি টেক্সট বক্স আছে, সেটাই "Your name"
     for (let i = 0; i < firstPwdIdx; i++) {
       const inp = allInputs[i];
       if (inp.type === 'password' || inp.type === 'email') continue;
@@ -147,11 +176,9 @@ async function signupGiz(page, email, token, password) {
       inp.dispatchEvent(new Event('input', { bubbles: true }));
       inp.dispatchEvent(new Event('change', { bubbles: true }));
       nameFilled = true;
-      console.log(`[Debug] Name filled at index ${i}`);
       break;
     }
 
-    // পাসওয়ার্ড ফিল্ড দুটো ভরে দাও
     if (passwordInputs.length >= 2) {
       setter.call(passwordInputs[0], data.password);
       passwordInputs[0].dispatchEvent(new Event('input', { bubbles: true }));
@@ -174,25 +201,31 @@ async function signupGiz(page, email, token, password) {
 
   await sleep(2000);
 
-  // ─── Step 4: Create an account বাটনে ক্লিক ───
+  // ─── Step 4: Create account ───
   const clicked = await clickButtonByText(page, 'Create an account');
   if (!clicked) {
     await page.screenshot({ path: 'error_screenshot.png' });
     throw new Error('Create an account বাটন পাওয়া যায়নি!');
   }
   console.log('[Flow] Clicked Create an account');
-  await sleep(8000);
+  await sleep(10000);
 }
 
 async function generateVideos(page, prompt, count = 2) {
   const results = [];
-  await page.goto(GIZ_VIDEO_URL, { waitUntil: 'networkidle2', timeout: 60000 });
-  await sleep(3000);
+  
+  try {
+    await safeGoto(page, GIZ_VIDEO_URL);
+  } catch (e) {
+    console.log(`[Video] Cannot load video page: ${e.message}`);
+    return results;
+  }
+  
+  await sleep(5000);
 
   for (let i = 0; i < count; i++) {
-    // Prompt ইনপুট
     try {
-      await page.waitForSelector('textarea', { timeout: 10000 });
+      await page.waitForSelector('textarea', { timeout: 30000 });
       const textareas = await page.$$('textarea');
       if (textareas.length > 0) {
         await textareas[0].click();
@@ -204,7 +237,6 @@ async function generateVideos(page, prompt, count = 2) {
 
     await sleep(1000);
 
-    // Generate বাটন
     const clicked = await page.evaluate(() => {
       const buttons = Array.from(document.querySelectorAll('button'));
       const btn = buttons.find(b =>
@@ -217,9 +249,8 @@ async function generateVideos(page, prompt, count = 2) {
 
     if (!clicked) console.log(`[Video ${i + 1}] Generate বাটন পাওয়া যায়নি`);
 
-    await sleep(20000);
+    await sleep(30000);
 
-    // ভিডিও লিংক সংগ্রহ
     const videoSrcs = await page.evaluate(() => {
       const videos = document.querySelectorAll('video');
       const srcs = [];
@@ -236,8 +267,12 @@ async function generateVideos(page, prompt, count = 2) {
     }
 
     if (i < count - 1) {
-      await page.reload({ waitUntil: 'networkidle2' });
-      await sleep(3000);
+      try {
+        await safeGoto(page, GIZ_VIDEO_URL);
+        await sleep(5000);
+      } catch (e) {
+        console.log(`[Video] Reload failed: ${e.message}`);
+      }
     }
   }
   return results;
@@ -258,7 +293,6 @@ async function logoutGiz(page) {
     });
   } catch (e) {
     console.log(`[Logout] Error: ${e.message}`);
-    await page.goto('https://app.giz.ai/api/auth/signOut', { waitUntil: 'networkidle2' });
   }
   await sleep(2000);
 }
@@ -275,7 +309,8 @@ async function runGizFlow(prompt) {
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--disable-accelerated-2d-canvas',
-      '--no-zygote'
+      '--no-zygote',
+      '--single-process'
     ]
   });
 
@@ -285,6 +320,10 @@ async function runGizFlow(prompt) {
     await page.setUserAgent(
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     );
+
+    // ডিফল্ট টাইমআউট বাড়িয়ে দাও
+    page.setDefaultTimeout(60000);
+    page.setDefaultNavigationTimeout(90000);
 
     await signupGiz(page, email, token, password);
     const videoLinks = await generateVideos(page, prompt, 2);
