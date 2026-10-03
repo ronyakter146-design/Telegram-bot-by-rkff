@@ -5,8 +5,7 @@ import string
 from playwright.async_api import async_playwright
 from best_tempmail import TempMail
 
-# ⚠️ এখানে Sign Up এর লিংক দিয়েছি (আগে ভুলে Sign In ছিল)
-GIZ_SIGNUP_URL = "https://app.giz.ai/signUp" 
+GIZ_SIGNUP_URL = "https://www.giz.ai/signUp"
 GIZ_VIDEO_URL = "https://app.giz.ai/ai-video-generator"
 
 _temp_mail = TempMail()
@@ -32,35 +31,34 @@ async def signup_giz(page, email, password):
     await page.goto(GIZ_SIGNUP_URL, wait_until="networkidle")
     await page.wait_for_timeout(3000)
 
-    # ইমেইল বক্সে টাইপ করবে (তোমার আগের ছবি অনুযায়ী placeholder)
-    try:
-        await page.wait_for_selector('input[placeholder="you@example.com"]', timeout=10000)
-        await page.fill('input[placeholder="you@example.com"]', email)
-    except:
-        await page.fill('input[placeholder*="example"]', email)
+    # --- ধাপ ১: ইমেইল বসিয়ে "Continue with Email" ক্লিক ---
+    await page.wait_for_selector('input[placeholder="you@example.com"]', timeout=10000)
+    await page.fill('input[placeholder="you@example.com"]', email)
+    await page.click('button:has-text("Continue with Email")')
+    await page.wait_for_timeout(3000)
 
-    # পাসওয়ার্ড বক্সে টাইপ করবে
-    await page.fill('input[placeholder="Password"]', password)
+    # --- ধাপ ২: ভেরিফিকেশন কোড, নাম ও পাসওয়ার্ড পূরণ ---
+    # ২.১ ভেরিফিকেশন কোড
+    await page.wait_for_selector('input[placeholder*="6-digit code"]', timeout=10000)
+    code = await _wait_for_verification_code(email)
+    if code:
+        await page.fill('input[placeholder*="6-digit code"]', code)
+    else:
+        print("[Signup] Verification code not received.")
+        await page.screenshot(path="error_screenshot.png")
+        raise Exception("Verification code পাওয়া যায়নি!")
 
-    # "Sign Up" বা "Create account" বাটনে ক্লিক করবে
-    try:
-        await page.click('button:has-text("Sign up")', timeout=5000)
-    except:
-        try:
-            await page.click('button:has-text("Create account")', timeout=5000)
-        except:
-            await page.click('button:has-text("Continue")', timeout=5000)
+    # ২.২ নাম
+    await page.fill('input[placeholder="Your name"]', "Temp User")
 
-    # ভেরিফিকেশন কোড এলে বসাবে
-    try:
-        await page.wait_for_selector('input[placeholder*="code"], input[name*="code"]', timeout=15000)
-        code = await _wait_for_verification_code(email)
-        if code:
-            await page.fill('input[placeholder*="code"], input[name*="code"]', code)
-            await page.click('button[type="submit"]')
-    except Exception:
-        pass
+    # ২.৩ পাসওয়ার্ড
+    await page.fill('input[placeholder="Set password"]', password)
 
+    # ২.৪ কনফার্ম পাসওয়ার্ড
+    await page.fill('input[placeholder="Confirm password"]', password)
+
+    # ২.৫ "Create an account" বাটনে ক্লিক
+    await page.click('button:has-text("Create an account")')
     await page.wait_for_timeout(5000)
 
 async def generate_videos(page, prompt, count=2):
