@@ -24,14 +24,12 @@ def _create_temp_inbox():
             email = f"{username}@{domain}"
             password = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
             
-            # অ্যাকাউন্ট তৈরি
             acc_res = requests.post("https://api.mail.tm/accounts", json={"address": email, "password": password})
             if acc_res.status_code not in [200, 201]:
                 print(f"[MailTM] Account creation failed: {acc_res.text}")
                 time.sleep(2)
                 continue
                 
-            # টোকেন সংগ্রহ
             token_res = requests.post("https://api.mail.tm/token", json={"address": email, "password": password}).json()
             token = token_res.get('token')
             if token:
@@ -70,38 +68,51 @@ async def signup_giz(page, email, token, password):
     if not email or "@" not in email:
         raise Exception(f"ভুল ইমেইল জেনারেট হয়েছে: {email}")
 
-    # ধাপ ১: ইমেইল বসানো (একটু ধীরে টাইপ করবে)
+    # ধাপ ১: ইমেইল বসানো
     await page.wait_for_selector('input[placeholder="you@example.com"]', timeout=15000)
-    await page.click('input[placeholder="you@example.com"]') # আগে ক্লিক করবে
-    await page.fill('input[placeholder="you@example.com"]', '') # পুরনো লেখা মুছবে
-    await page.type('input[placeholder="you@example.com"]', email, delay=50) # ৫০ মিলিসেকেন্ড delay দিয়ে টাইপ করবে
-    
-    # ইমেইল বসেছে কিনা নিশ্চিত হওয়ার জন্য একটু অপেক্ষা
+    await page.click('input[placeholder="you@example.com"]')
+    await page.fill('input[placeholder="you@example.com"]', '')
+    await page.type('input[placeholder="you@example.com"]', email, delay=50)
     await page.wait_for_timeout(1000) 
     
-    # "Continue with Email" বাটনে ক্লিক
     await page.click('button:has-text("Continue with Email")')
-    await page.wait_for_timeout(3000)
+    await page.wait_for_timeout(5000) # ৫ সেকেন্ড অপেক্ষা
 
-    # ধাপ ২: ভেরিফিকেশন কোড বক্স খোঁজা
+    # ধাপ ২: ভেরিফিকেশন কোড বসানো
     try:
-        await page.wait_for_selector('input[placeholder*="6-digit code"]', timeout=20000)
-    except:
+        await page.wait_for_selector('input[placeholder*="6-digit code"]', timeout=15000)
+        code = _wait_for_verification_code(token)
+        if code:
+            await page.fill('input[placeholder*="6-digit code"]', code)
+        else:
+            raise Exception("ইনবক্সে ভেরিফিকেশন কোড আসেনি!")
+    except Exception as e:
         await page.screenshot(path="error_screenshot.png")
-        raise Exception("৬ ডিজিটের কোড বক্স পাওয়া যায়নি! স্ক্রিনশট দেখুন।")
+        raise Exception(f"ভেরিফিকেশন কোড ধাপে সমস্যা: {e}")
 
-    # কোড বসানো
-    code = _wait_for_verification_code(token)
-    if code:
-        await page.fill('input[placeholder*="6-digit code"]', code)
-    else:
+    # ধাপ ৩: নাম, পাসওয়ার্ড বসানো (এখানে ৩টি আলাদা সিলেক্টর ব্যবহার করা হয়েছে)
+    try:
+        name_selectors = ['input[placeholder="Your name"]', 'input[name="name"]', 'input[placeholder*="name"]']
+        name_filled = False
+        for sel in name_selectors:
+            try:
+                await page.wait_for_selector(sel, timeout=5000)
+                await page.fill(sel, "Temp User")
+                name_filled = True
+                break
+            except:
+                continue
+        
+        if not name_filled:
+            raise Exception("'Your name' বক্স খুঁজে পাওয়া যায়নি!")
+
+        await page.fill('input[placeholder="Set password"]', password)
+        await page.fill('input[placeholder="Confirm password"]', password)
+        await page.click('button:has-text("Create an account")')
+    except Exception as e:
         await page.screenshot(path="error_screenshot.png")
-        raise Exception("ইনবক্সে ভেরিফিকেশন কোড আসেনি!")
+        raise Exception(f"নাম/পাসওয়ার্ড ধাপে সমস্যা: {e}")
 
-    await page.fill('input[placeholder="Your name"]', "Temp User")
-    await page.fill('input[placeholder="Set password"]', password)
-    await page.fill('input[placeholder="Confirm password"]', password)
-    await page.click('button:has-text("Create an account")')
     await page.wait_for_timeout(5000)
 
 async def generate_videos(page, prompt, count=2):
