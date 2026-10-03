@@ -1,43 +1,36 @@
 const TelegramBot = require('node-telegram-bot-api');
-const axios = require('axios');
+const express = require('express');
 const fs = require('fs');
 const { runGizFlow } = require('./giz_automation');
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const PORT = process.env.PORT || 10000;
+const RENDER_URL = process.env.RENDER_EXTERNAL_URL;
 
 if (!BOT_TOKEN) {
   console.error('TELEGRAM_BOT_TOKEN নেই!');
   process.exit(1);
 }
 
-// ─── Telegram-এর পুরনো pending update / webhook ক্লিয়ার ───
-async function clearPendingUpdates() {
-  try {
-    await axios.get(`https://api.telegram.org/bot${BOT_TOKEN}/deleteWebhook?drop_pending_updates=true`);
-    console.log('[Telegram] Webhook cleared & pending updates dropped.');
-  } catch (e) {
-    console.log('[Telegram] Clear failed:', e.message);
-  }
-}
+// ─── Express Server (webhook এর জন্য) ───
+const app = express();
+app.use(express.json());
 
-const bot = new TelegramBot(BOT_TOKEN, {
-  polling: {
-    autoStart: true,
-    interval: 1000,
-    params: { timeout: 10 }
-  }
+// Health check endpoint
+app.get('/', (req, res) => {
+  res.send('Bot is running!');
 });
 
-// ─── Polling Error Handle (409 Conflict এড়ানোর জন্য) ───
-bot.on('polling_error', (error) => {
-  if (error.code === 'ETELEGRAM' && error.message && error.message.includes('409')) {
-    console.log('[Warning] Polling conflict detected (409). Ignoring...');
-    return;
-  }
-  console.error('[Polling Error]', error.message);
+// Telegram webhook endpoint
+app.post(`/bot${BOT_TOKEN}`, (req, res) => {
+  bot.processUpdate(req.body);
+  res.sendStatus(200);
 });
 
-// ─── /start কমান্ড ───
+// ─── Bot (polling ছাড়া) ───
+const bot = new TelegramBot(BOT_TOKEN, { polling: false });
+
+// ─── /start ───
 bot.onText(/\/start/, (msg) => {
   bot.sendMessage(
     msg.chat.id,
@@ -97,7 +90,25 @@ bot.on('message', async (msg) => {
   }
 });
 
-// ─── শুরুতে পুরনো update ক্লিয়ার করে বট চালু ───
-clearPendingUpdates().then(() => {
-  console.log('Bot started... Polling.');
+// ─── Webhook সেটআপ ───
+async function setupWebhook() {
+  try {
+    await bot.deleteWebHook();
+    const webhookUrl = `${RENDER_URL}/bot${BOT_TOKEN}`;
+    await bot.setWebHook(webhookUrl);
+    console.log(`✅ Webhook set: ${webhookUrl}`);
+  } catch (e) {
+    console.error('❌ Webhook setup failed:', e.message);
+  }
+}
+
+// ─── Server চালু করো ───
+app.listen(PORT, async () => {
+  console.log(`✅ Server running on port ${PORT}`);
+  console.log(`RENDER_URL: ${RENDER_URL}`);
+  if (RENDER_URL) {
+    await setupWebhook();
+  } else {
+    console.log('⚠️ RENDER_EXTERNAL_URL পাওয়া যায়নি!');
+  }
 });
