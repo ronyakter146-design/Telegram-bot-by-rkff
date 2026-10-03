@@ -29,9 +29,61 @@ async def _wait_for_verification_code(address, timeout=60):
 
 async def signup_giz(page, email, password):
     await page.goto(GIZ_SIGNUP_URL, wait_until="networkidle")
-    await page.fill('input[type="email"]', email)
-    await page.fill('input[type="password"]', password)
-    await page.click('button[type="submit"]')
+
+    # ১. "Sign up with Email" বাটন থাকলে তাতে ক্লিক করবে
+    try:
+        await page.click('text="Sign up with email"', timeout=3000)
+    except:
+        try:
+            await page.click('text="Email"', timeout=3000)
+        except:
+            pass
+
+    # ২. ইমেইল বসানোর জন্য ৫টি আলাদা জায়গায় খুঁজবে
+    email_selectors = [
+        'input[type="email"]', 
+        'input[name="email"]', 
+        'input#email', 
+        'input[placeholder*="email"]', 
+        'input[placeholder*="Email"]'
+    ]
+    email_filled = False
+    for selector in email_selectors:
+        try:
+            await page.wait_for_selector(selector, timeout=5000)
+            await page.fill(selector, email)
+            email_filled = True
+            break
+        except:
+            continue
+
+    if not email_filled:
+        raise Exception("ইমেইল বক্স খুঁজে পাওয়া যায়নি!")
+
+    # ৩. পাসওয়ার্ড বসানোর জন্য খুঁজবে
+    password_selectors = ['input[type="password"]', 'input[name="password"]', 'input#password']
+    for selector in password_selectors:
+        try:
+            await page.fill(selector, password)
+            break
+        except:
+            continue
+
+    # ৪. সাবমিট বাটন খুঁজে ক্লিক করবে
+    submit_selectors = [
+        'button[type="submit"]', 
+        'button:has-text("Sign up")', 
+        'button:has-text("Continue")', 
+        'button:has-text("Login")'
+    ]
+    for selector in submit_selectors:
+        try:
+            await page.click(selector)
+            break
+        except:
+            continue
+
+    # ৫. ভেরিফিকেশন কোডের জন্য অপেক্ষা
     try:
         await page.wait_for_selector('input[placeholder*="code"], input[name*="code"]', timeout=15000)
         code = await _wait_for_verification_code(email)
@@ -46,8 +98,34 @@ async def generate_videos(page, prompt, count=2):
     results = []
     await page.goto(GIZ_VIDEO_URL, wait_until="networkidle")
     for i in range(count):
-        await page.fill('textarea[placeholder*="prompt"], textarea[name*="prompt"]', prompt)
-        await page.click('button:has-text("Generate"), button:has-text("Create")')
+        # প্রম্পট ইনপুটের জন্য একাধিক সিলেক্টর চেষ্টা
+        prompt_selectors = [
+            'textarea[placeholder*="prompt"]', 
+            'textarea[name*="prompt"]', 
+            'textarea[placeholder*="describe"]',
+            'textarea'
+        ]
+        for selector in prompt_selectors:
+            try:
+                await page.wait_for_selector(selector, timeout=5000)
+                await page.fill(selector, prompt)
+                break
+            except:
+                continue
+
+        # জেনারেট বাটন খোঁজা
+        gen_button_selectors = [
+            'button:has-text("Generate")', 
+            'button:has-text("Create")',
+            'button[type="submit"]'
+        ]
+        for selector in gen_button_selectors:
+            try:
+                await page.click(selector)
+                break
+            except:
+                continue
+
         await page.wait_for_timeout(20000)
         video_elements = await page.query_selector_all('video source, video')
         if video_elements:
