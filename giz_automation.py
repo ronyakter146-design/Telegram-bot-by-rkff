@@ -5,7 +5,8 @@ import string
 from playwright.async_api import async_playwright
 from best_tempmail import TempMail
 
-GIZ_SIGNUP_URL = "https://app.giz.ai/signIn"
+# ⚠️ এখানে Sign Up এর লিংক দিয়েছি (আগে ভুলে Sign In ছিল)
+GIZ_SIGNUP_URL = "https://app.giz.ai/signUp" 
 GIZ_VIDEO_URL = "https://app.giz.ai/ai-video-generator"
 
 _temp_mail = TempMail()
@@ -31,37 +32,34 @@ async def signup_giz(page, email, password):
     await page.goto(GIZ_SIGNUP_URL, wait_until="networkidle")
     await page.wait_for_timeout(3000)
 
-    # ইমেইল বক্স খোঁজার জন্য সব চেষ্টা করবে
-    email_filled = False
-    for selector in ['input[type="email"]', 'input[name="email"]', 'input#email', 'input[placeholder*="mail"]', 'input[placeholder*="Mail"]']:
-        try:
-            await page.wait_for_selector(selector, timeout=5000)
-            await page.fill(selector, email)
-            email_filled = True
-            break
-        except:
-            continue
+    # ইমেইল বক্সে টাইপ করবে (তোমার আগের ছবি অনুযায়ী placeholder)
+    try:
+        await page.wait_for_selector('input[placeholder="you@example.com"]', timeout=10000)
+        await page.fill('input[placeholder="you@example.com"]', email)
+    except:
+        await page.fill('input[placeholder*="example"]', email)
 
-    # যদি ইমেইল বক্স না পায়, তাহলে স্ক্রিনশট তুলে এরর দেবে
-    if not email_filled:
-        await page.screenshot(path="error_screenshot.png")
-        raise Exception("ইমেইল বক্স খুঁজে পাওয়া যায়নি!")
+    # পাসওয়ার্ড বক্সে টাইপ করবে
+    await page.fill('input[placeholder="Password"]', password)
 
-    # পাসওয়ার্ড বসাবে
-    for selector in ['input[type="password"]', 'input[name="password"]', 'input#password']:
+    # "Sign Up" বা "Create account" বাটনে ক্লিক করবে
+    try:
+        await page.click('button:has-text("Sign up")', timeout=5000)
+    except:
         try:
-            await page.fill(selector, password)
-            break
+            await page.click('button:has-text("Create account")', timeout=5000)
         except:
-            continue
+            await page.click('button:has-text("Continue")', timeout=5000)
 
-    # সাবমিট বাটনে ক্লিক করবে
-    for selector in ['button[type="submit"]', 'button:has-text("Sign up")', 'button:has-text("Continue")', 'button:has-text("Login")']:
-        try:
-            await page.click(selector)
-            break
-        except:
-            continue
+    # ভেরিফিকেশন কোড এলে বসাবে
+    try:
+        await page.wait_for_selector('input[placeholder*="code"], input[name*="code"]', timeout=15000)
+        code = await _wait_for_verification_code(email)
+        if code:
+            await page.fill('input[placeholder*="code"], input[name*="code"]', code)
+            await page.click('button[type="submit"]')
+    except Exception:
+        pass
 
     await page.wait_for_timeout(5000)
 
@@ -109,6 +107,7 @@ async def run_giz_flow(prompt):
         try:
             email = await _create_temp_inbox()
             password = _generate_password()
+            print(f"[Flow] Email: {email}")
             await signup_giz(page, email, password)
             video_links = await generate_videos(page, prompt, count=2)
             await logout_giz(page)
