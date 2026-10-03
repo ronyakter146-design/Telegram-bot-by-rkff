@@ -29,8 +29,9 @@ def _create_temp_inbox():
 def _wait_for_verification_code(token, timeout=90):
     """mail.tm API থেকে ভেরিফিকেশন কোড খুঁজে বের করে।"""
     headers = {"Authorization": f"Bearer {token}"}
-    start_time = asyncio.get_event_loop().time()
-    while asyncio.get_event_loop().time() - start_time < timeout:
+    import time
+    start_time = time.time()
+    while time.time() - start_time < timeout:
         try:
             res = requests.get("https://api.mail.tm/messages", headers=headers).json()
             if res.get('hydra:totalItems', 0) > 0:
@@ -42,7 +43,6 @@ def _wait_for_verification_code(token, timeout=90):
                     return match.group(1)
         except Exception as e:
             print(f"[OTP] Error: {e}")
-        import time
         time.sleep(5) # ৫ সেকেন্ড পর পর চেক করবে
     return None
 
@@ -56,14 +56,21 @@ async def signup_giz(page, email, token, password):
     await page.click('button:has-text("Continue with Email")')
     await page.wait_for_timeout(3000)
 
-    # ধাপ ২: ভেরিফিকেশন কোড, নাম ও পাসওয়ার্ড
-    await page.wait_for_selector('input[placeholder*="6-digit code"]', timeout=10000)
+    # ধাপ ২: ভেরিফিকেশন কোড বক্স খোঁজা (টাইমআউট বাড়িয়ে ২০ সেকেন্ড করা হলো)
+    try:
+        await page.wait_for_selector('input[placeholder*="6-digit code"]', timeout=20000)
+    except:
+        # যদি ২০ সেকেন্ডেও না পায়, তাহলে স্ক্রিনশট তুলে রাখবে
+        await page.screenshot(path="error_screenshot.png")
+        raise Exception("৬ ডিজিটের কোড বক্স পাওয়া যায়নি! স্ক্রিনশট দেখুন।")
+
+    # কোড বসানো
     code = _wait_for_verification_code(token)
     if code:
         await page.fill('input[placeholder*="6-digit code"]', code)
     else:
         await page.screenshot(path="error_screenshot.png")
-        raise Exception("Verification code পাওয়া যায়নি!")
+        raise Exception("ইনবক্সে ভেরিফিকেশন কোড আসেনি!")
 
     await page.fill('input[placeholder="Your name"]', "Temp User")
     await page.fill('input[placeholder="Set password"]', password)
