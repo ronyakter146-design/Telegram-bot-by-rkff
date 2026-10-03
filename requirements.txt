@@ -1,0 +1,4 @@
+python-telegram-bot==21.6
+playwright==1.48.0
+best-tempmail==0.1.4
+requests==2.32.3
