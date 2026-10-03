@@ -4,6 +4,7 @@ import random
 import string
 import re
 import requests
+import time
 from playwright.async_api import async_playwright
 
 GIZ_SIGNUP_URL = "https://www.giz.ai/signUp"
@@ -14,22 +15,37 @@ def _generate_password(length=12):
     return "".join(random.choice(chars) for _ in range(length))
 
 def _create_temp_inbox():
-    """mail.tm API থেকে নতুন টেম্পোরারি ইমেইল তৈরি করে।"""
-    domain_res = requests.get("https://api.mail.tm/domains").json()
-    domain = domain_res['hydra:member'][0]['domain']
-    username = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
-    email = f"{username}@{domain}"
-    password = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
-    
-    requests.post("https://api.mail.tm/accounts", json={"address": email, "password": password})
-    token_res = requests.post("https://api.mail.tm/token", json={"address": email, "password": password}).json()
-    token = token_res['token']
-    return email, token
+    """mail.tm API থেকে নতুন টেম্পোরারি ইমেইল তৈরি করে (রিট্রাই সহ)।"""
+    for attempt in range(3):
+        try:
+            domain_res = requests.get("https://api.mail.tm/domains").json()
+            domain = domain_res['hydra:member'][0]['domain']
+            username = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
+            email = f"{username}@{domain}"
+            password = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
+            
+            # অ্যাকাউন্ট তৈরি
+            acc_res = requests.post("https://api.mail.tm/accounts", json={"address": email, "password": password})
+            if acc_res.status_code not in [200, 201]:
+                print(f"[MailTM] Account creation failed: {acc_res.text}")
+                time.sleep(2)
+                continue
+                
+            # টোকেন সংগ্রহ
+            token_res = requests.post("https://api.mail.tm/token", json={"address": email, "password": password}).json()
+            token = token_res.get('token')
+            if token:
+                print(f"[MailTM] Successfully created email: {email}")
+                return email, token
+        except Exception as e:
+            print(f"[MailTM] Attempt {attempt+1} error: {e}")
+            time.sleep(2)
+            
+    raise Exception("ইমেইল তৈরি করা যায়নি! mail.tm সার্ভারে সমস্যা।")
 
 def _wait_for_verification_code(token, timeout=90):
     """mail.tm API থেকে ভেরিফিকেশন কোড খুঁজে বের করে।"""
     headers = {"Authorization": f"Bearer {token}"}
-    import time
     start_time = time.time()
     while time.time() - start_time < timeout:
         try:
@@ -43,24 +59,34 @@ def _wait_for_verification_code(token, timeout=90):
                     return match.group(1)
         except Exception as e:
             print(f"[OTP] Error: {e}")
-        time.sleep(5) # ৫ সেকেন্ড পর পর চেক করবে
+        time.sleep(5)
     return None
 
 async def signup_giz(page, email, token, password):
     await page.goto(GIZ_SIGNUP_URL, wait_until="networkidle")
     await page.wait_for_timeout(3000)
 
-    # ধাপ ১: ইমেইল বসিয়ে "Continue with Email" ক্লিক
-    await page.wait_for_selector('input[placeholder="you@example.com"]', timeout=10000)
-    await page.fill('input[placeholder="you@example.com"]', email)
+    # ইমেইল ভ্যালিডেশন
+    if not email or "@" not in email:
+        raise Exception(f"ভুল ইমেইল জেনারেট হয়েছে: {email}")
+
+    # ধাপ ১: ইমেইল বসানো (একটু ধীরে টাইপ করবে)
+    await page.wait_for_selector('input[placeholder="you@example.com"]', timeout=15000)
+    await page.click('input[placeholder="you@example.com"]') # আগে ক্লিক করবে
+    await page.fill('input[placeholder="you@example.com"]', '') # পুরনো লেখা মুছবে
+    await page.type('input[placeholder="you@example.com"]', email, delay=50) # ৫০ মিলিসেকেন্ড delay দিয়ে টাইপ করবে
+    
+    # ইমেইল বসেছে কিনা নিশ্চিত হওয়ার জন্য একটু অপেক্ষা
+    await page.wait_for_timeout(1000) 
+    
+    # "Continue with Email" বাটনে ক্লিক
     await page.click('button:has-text("Continue with Email")')
     await page.wait_for_timeout(3000)
 
-    # ধাপ ২: ভেরিফিকেশন কোড বক্স খোঁজা (টাইমআউট বাড়িয়ে ২০ সেকেন্ড করা হলো)
+    # ধাপ ২: ভেরিফিকেশন কোড বক্স খোঁজা
     try:
         await page.wait_for_selector('input[placeholder*="6-digit code"]', timeout=20000)
     except:
-        # যদি ২০ সেকেন্ডেও না পায়, তাহলে স্ক্রিনশট তুলে রাখবে
         await page.screenshot(path="error_screenshot.png")
         raise Exception("৬ ডিজিটের কোড বক্স পাওয়া যায়নি! স্ক্রিনশট দেখুন।")
 
