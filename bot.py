@@ -40,7 +40,14 @@ async def handle_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logger.error(f"Error: {e}")
-        await msg.edit_text(f"❌ ত্রুটি: {str(e)[:200]}")
+        # যদি কোনো কারণে বট আটকে যায়, তাহলে স্ক্রিনশট পাঠাবে
+        if os.path.exists("error_screenshot.png"):
+            await update.message.reply_photo(
+                photo=open("error_screenshot.png", "rb"),
+                caption=f"❌ বট ওয়েবসাইটে সমস্যায় পড়েছে।\n\nএই ছবিটা ডেভেলপারকে পাঠাও।"
+            )
+        else:
+            await msg.edit_text(f"❌ ত্রুটি: {str(e)[:200]}")
 
 def main():
     if not BOT_TOKEN:
