@@ -76,7 +76,7 @@ async def signup_giz(page, email, token, password):
     await page.wait_for_timeout(1000) 
     
     await page.click('button:has-text("Continue with Email")')
-    await page.wait_for_timeout(5000) # ৫ সেকেন্ড অপেক্ষা
+    await page.wait_for_timeout(5000) # Step 2 লোড হওয়ার জন্য অপেক্ষা
 
     # ধাপ ২: ভেরিফিকেশন কোড বসানো
     try:
@@ -84,31 +84,38 @@ async def signup_giz(page, email, token, password):
         code = _wait_for_verification_code(token)
         if code:
             await page.fill('input[placeholder*="6-digit code"]', code)
+            print(f"[Flow] Filled OTP: {code}")
+            # OTP বসানোর পর Giz.ai ভেরিফাই করতে সময় নেয়, তাই ৫ সেকেন্ড অপেক্ষা
+            await page.wait_for_timeout(5000) 
         else:
             raise Exception("ইনবক্সে ভেরিফিকেশন কোড আসেনি!")
     except Exception as e:
         await page.screenshot(path="error_screenshot.png")
         raise Exception(f"ভেরিফিকেশন কোড ধাপে সমস্যা: {e}")
 
-    # ধাপ ৩: নাম, পাসওয়ার্ড বসানো (এখানে ৩টি আলাদা সিলেক্টর ব্যবহার করা হয়েছে)
+    # ধাপ ৩: নাম, পাসওয়ার্ড বসানো (ইনপুট বক্সের ক্রম অনুযায়ী)
     try:
-        name_selectors = ['input[placeholder="Your name"]', 'input[name="name"]', 'input[placeholder*="name"]']
-        name_filled = False
-        for sel in name_selectors:
-            try:
-                await page.wait_for_selector(sel, timeout=5000)
-                await page.fill(sel, "Temp User")
-                name_filled = True
-                break
-            except:
-                continue
+        inputs = page.locator('input')
+        count = await inputs.count()
+        print(f"[Flow] Found {count} input fields on Step 2")
         
-        if not name_filled:
-            raise Exception("'Your name' বক্স খুঁজে পাওয়া যায়নি!")
+        if count >= 4:
+            # ১ম ইনপুট: OTP (আগেই ভরা হয়েছে)
+            # ২য় ইনপুট: Your name
+            await inputs.nth(1).fill("Temp User")
+            # ৩য় ইনপুট: Set password
+            await inputs.nth(2).fill(password)
+            # ৪র্থ ইনপুট: Confirm password
+            await inputs.nth(3).fill(password)
+        else:
+            # বিকল্প পদ্ধতি (যদি ইনপুট সংখ্যা কম হয়)
+            await page.fill('input[placeholder*="name" i]', "Temp User")
+            pass_inputs = page.locator('input[type="password"]')
+            await pass_inputs.nth(0).fill(password)
+            await pass_inputs.nth(1).fill(password)
 
-        await page.fill('input[placeholder="Set password"]', password)
-        await page.fill('input[placeholder="Confirm password"]', password)
         await page.click('button:has-text("Create an account")')
+        print("[Flow] Clicked Create an account")
     except Exception as e:
         await page.screenshot(path="error_screenshot.png")
         raise Exception(f"নাম/পাসওয়ার্ড ধাপে সমস্যা: {e}")
